@@ -38,6 +38,8 @@ if [[ "${VERIFY_CODEGEN:-}" == "true" ]]; then
 fi
 COMMON_FLAGS="${VERIFY_FLAG:-} --go-header-file ${SCRIPT_ROOT}/hack/boilerplate.go.txt"
 
+echo ${COMMON_FLAGS}
+
 echo "Generating deepcopy funcs"
 "${gobin}/deepcopy-gen" --input-dirs "${FQ_APIS}" -O zz_generated.deepcopy --bounding-dirs "${APIS_PKG}" ${COMMON_FLAGS}
 

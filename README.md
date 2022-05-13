@@ -60,6 +60,14 @@ kubectl apply -k deploy
 ```
 
 ### Deploy a Work on the Hub cluster
+```shell
+kubectl delete secret hub-kubeconfig-secret -n work --ignore-not-found
+kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n work
+go run cmd/workcontroller/workcontroller.go --work-namespace=work --hub-kubeconfig=hub-kubeconfig-secret
+```
+
+
+### Deploy a Work on the Hub cluster
 On the `Hub` cluster terminal, run the following command:
 ```
 kubectl apply -f examples/example-work.yaml
