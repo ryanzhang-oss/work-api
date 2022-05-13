@@ -29,11 +29,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -41,6 +46,7 @@ import (
 type ApplyWorkReconciler struct {
 	client             client.Client
 	spokeDynamicClient dynamic.Interface
+	spokeClient        client.Client
 	log                logr.Logger
 	restMapper         meta.RESTMapper
 }
@@ -68,6 +74,29 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
 		return ctrl.Result{}, nil
 	}
+
+	appliedWork := &workv1alpha1.AppliedWork{}
+	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: req.Name}, appliedWork); err != nil {
+		if !errors.IsNotFound(err) {
+			klog.ErrorS(err, "failed to get the appliedWork", "name", req.Name)
+			return ctrl.Result{}, err
+		}
+		klog.InfoS("appliedWork does not exist yet, we will create it", "item", req.NamespacedName)
+		appliedWork := &workv1alpha1.AppliedWork{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: req.Name,
+			},
+			Spec: workv1alpha1.AppliedWorkSpec{
+				ManifestWorkName: req.Name,
+			},
+		}
+		if cErr := r.spokeClient.Create(ctx, appliedWork); cErr != nil {
+			klog.ErrorS(err, "failed to create the appliedWork", "name", req.Name)
+			return ctrl.Result{}, err
+		}
+	}
+
+	klog.InfoS("work reconcile loop triggered", "item", req.NamespacedName)
 
 	results := r.applyManifests(work.Spec.Workload.Manifests, work.Status.ManifestConditions)
 	errs := []error{}
@@ -183,7 +212,8 @@ func (r *ApplyWorkReconciler) applyUnstructrued(
 
 // SetupWithManager wires up the controller.
 func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{},
+		builder.WithPredicates(predicate.GenerationChangedPredicate{})).Complete(r)
 }
 
 // Return true when label/annotation is changed or generation is changed

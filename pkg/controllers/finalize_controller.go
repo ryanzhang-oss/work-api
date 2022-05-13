@@ -24,9 +24,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
@@ -49,6 +53,8 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	klog.InfoS("Finalize work reconcile loop triggered", "item", req.NamespacedName)
+
 	// cleanup finalizer and resources
 	if !work.DeletionTimestamp.IsZero() {
 		// TODO add clean resource logic
@@ -70,5 +76,6 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 // SetupWithManager wires up the controller.
 func (r *FinalizeWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{},
+		builder.WithPredicates(predicate.GenerationChangedPredicate{})).Complete(r)
 }

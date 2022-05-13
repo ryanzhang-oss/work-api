@@ -21,18 +21,26 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
-// WorkStatusReconciler reconciles a Work object
+// WorkStatusReconciler reconciles a Work object when its status changes
 type WorkStatusReconciler struct {
-	hubClient   client.Client
-	spokeClient client.Client
-	restMapper  meta.RESTMapper
+	appliedResourceTracker
+}
+
+func newWorkStatusReconciler(hubClient client.Client, spokeClient client.Client, restMapper meta.RESTMapper) *WorkStatusReconciler {
+	return &WorkStatusReconciler{
+		appliedResourceTracker{
+			hubClient:   hubClient,
+			spokeClient: spokeClient,
+			restMapper:  restMapper,
+		},
+	}
 }
 
 // Reconcile implement the control loop logic for Work Status.
@@ -41,17 +49,13 @@ func (r *WorkStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	err := r.hubClient.Get(ctx, req.NamespacedName, work)
 	switch {
 	case errors.IsNotFound(err):
+		klog.InfoS("work does not exist", "item", req.NamespacedName)
 		return ctrl.Result{}, nil
 	case err != nil:
+		klog.ErrorS(err, "failed to get work", "item", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
-
-	// do nothing if the finalizer is not present
-	// it ensures all maintained resources will be cleaned once work is deleted
-	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
+	klog.InfoS("work status reconcile loop triggered", "item", req.NamespacedName)
 	return ctrl.Result{}, nil
 }
 

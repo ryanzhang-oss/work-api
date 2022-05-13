@@ -18,28 +18,42 @@ package controllers
 
 import (
 	"context"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
-// AppliedWorkReconciler reconciles an AppliedWork object
-type AppliedWorkReconciler struct {
+type appliedResourceTracker struct {
 	hubClient   client.Client
 	spokeClient client.Client
 	restMapper  meta.RESTMapper
 }
 
+// AppliedWorkReconciler reconciles an AppliedWork object
+type AppliedWorkReconciler struct {
+	appliedResourceTracker
+}
+
+func newAppliedWorkReconciler(hubClient client.Client, spokeClient client.Client, restMapper meta.RESTMapper) *AppliedWorkReconciler {
+	return &AppliedWorkReconciler{
+		appliedResourceTracker{
+			hubClient:   hubClient,
+			spokeClient: spokeClient,
+			restMapper:  restMapper,
+		},
+	}
+}
+
 // Reconcile implement the control loop logic for AppliedWork object.
 func (r *AppliedWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	work := &workv1alpha1.Work{}
-	err := r.spokeClient.Get(ctx, req.NamespacedName, work)
+	appliedWork := &workv1alpha1.AppliedWork{}
+	err := r.spokeClient.Get(ctx, req.NamespacedName, appliedWork)
 	switch {
 	case errors.IsNotFound(err):
 		klog.InfoS("appliedWork does not exist", "item", req.NamespacedName)
@@ -49,15 +63,9 @@ func (r *AppliedWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	klog.InfoS("appliedWork does not exist", "item", req.NamespacedName)
+	klog.InfoS("applied work reconcile loop triggered", "item", req.NamespacedName)
 
-	// do nothing if the finalizer is not present
-	// it ensures all maintained resources will be cleaned once work is deleted
-	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
 // SetupWithManager wires up the controller.

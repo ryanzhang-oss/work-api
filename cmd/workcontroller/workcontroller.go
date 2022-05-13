@@ -30,7 +30,6 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -68,7 +67,7 @@ func main() {
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	hubConfig, err := getKubeConfig(workNamespace, hubkubeconfig)
+	hubConfig, err := getKubeConfig(hubkubeconfig)
 	if err != nil {
 		setupLog.Error(err, "error reading kubeconfig to connect to hub")
 		os.Exit(1)
@@ -80,13 +79,13 @@ func main() {
 	}
 }
 
-func getKubeConfig(workNamespace, hubkubeconfig string) (*restclient.Config, error) {
+func getKubeConfig(hubkubeconfig string) (*restclient.Config, error) {
 	spokeClientSet, err := kubernetes.NewForConfig(ctrl.GetConfigOrDie())
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create the spoke client")
 	}
 
-	secret, err := spokeClientSet.CoreV1().Secrets(workNamespace).Get(context.Background(), hubkubeconfig, metav1.GetOptions{})
+	secret, err := spokeClientSet.CoreV1().Secrets("work").Get(context.Background(), hubkubeconfig, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot find kubeconfig secrete")
 	}
@@ -96,7 +95,6 @@ func getKubeConfig(workNamespace, hubkubeconfig string) (*restclient.Config, err
 		return nil, fmt.Errorf("wrong formatted kube config")
 	}
 
-	klog.InfoS("kubeConfig", "data", kubeConfigData)
 	kubeConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeConfigData)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot create the rest client")
