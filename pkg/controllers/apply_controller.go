@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
@@ -60,6 +61,8 @@ type applyResult struct {
 
 // Reconcile implement the control loop logic for Work object.
 func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	klog.InfoS("work reconcile loop triggered", "item", req.NamespacedName)
+
 	work := &workv1alpha1.Work{}
 	err := r.client.Get(ctx, req.NamespacedName, work)
 	switch {
@@ -72,33 +75,25 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// do nothing if the finalizer is not present
 	// it ensures all maintained resources will be cleaned once work is deleted
 	if !controllerutil.ContainsFinalizer(work, workFinalizer) {
+		klog.InfoS("the work has no finalizer yet, the work finalizer will create it", "item", req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
 
+	// we created the AppliedWork before set the finalizer so it should exist
 	appliedWork := &workv1alpha1.AppliedWork{}
 	if err := r.spokeClient.Get(ctx, types.NamespacedName{Name: req.Name}, appliedWork); err != nil {
-		if !errors.IsNotFound(err) {
-			klog.ErrorS(err, "failed to get the appliedWork", "name", req.Name)
-			return ctrl.Result{}, err
-		}
-		klog.InfoS("appliedWork does not exist yet, we will create it", "item", req.NamespacedName)
-		appliedWork := &workv1alpha1.AppliedWork{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: req.Name,
-			},
-			Spec: workv1alpha1.AppliedWorkSpec{
-				ManifestWorkName: req.Name,
-			},
-		}
-		if cErr := r.spokeClient.Create(ctx, appliedWork); cErr != nil {
-			klog.ErrorS(err, "failed to create the appliedWork", "name", req.Name)
-			return ctrl.Result{}, err
-		}
+		klog.ErrorS(err, "failed to get the appliedWork", "name", req.Name)
+		return ctrl.Result{}, err
 	}
 
-	klog.InfoS("work reconcile loop triggered", "item", req.NamespacedName)
+	owner := metav1.OwnerReference{
+		APIVersion: workv1alpha1.GroupVersion.String(),
+		Kind:       appliedWork.Kind,
+		Name:       appliedWork.GetName(),
+		UID:        appliedWork.GetUID(),
+	}
 
-	results := r.applyManifests(work.Spec.Workload.Manifests, work.Status.ManifestConditions)
+	results := r.applyManifests(work.Spec.Workload.Manifests, work.Status.ManifestConditions, owner)
 	errs := []error{}
 
 	// Update manifestCondition based on the results
@@ -138,21 +133,23 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest, manifestConditions []workv1alpha1.ManifestCondition) []applyResult {
+func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
+	manifestConditions []workv1alpha1.ManifestCondition, owner metav1.OwnerReference) []applyResult {
 	results := []applyResult{}
 
 	for index, manifest := range manifests {
 		result := applyResult{
 			identifier: workv1alpha1.ResourceIdentifier{Ordinal: index},
 		}
-		gvr, required, err := r.decodeUnstructured(manifest)
+		gvr, rawObj, err := r.decodeUnstructured(manifest)
 		if err != nil {
 			result.err = err
 		} else {
 			var obj *unstructured.Unstructured
-			result.identifier = buildResourceIdentifier(index, required, gvr)
+			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
+			rawObj.SetOwnerReferences(append(rawObj.GetOwnerReferences(), owner))
 			observedGeneration := findObservedGenerationOfManifest(result.identifier, manifestConditions)
-			obj, result.updated, result.err = r.applyUnstructrued(gvr, required, observedGeneration)
+			obj, result.updated, result.err = r.applyUnstructrued(gvr, rawObj, observedGeneration)
 			if obj != nil {
 				result.generation = obj.GetGeneration()
 			}
@@ -213,7 +210,36 @@ func (r *ApplyWorkReconciler) applyUnstructrued(
 // SetupWithManager wires up the controller.
 func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{},
-		builder.WithPredicates(predicate.GenerationChangedPredicate{})).Complete(r)
+		builder.WithPredicates(UpdateSpecOrMetaOnlyPredicate{})).Complete(r)
+}
+
+// We don't need to process t
+type UpdateSpecOrMetaOnlyPredicate struct {
+	predicate.Funcs
+}
+
+func (UpdateSpecOrMetaOnlyPredicate) Update(e event.UpdateEvent) bool {
+	if e.ObjectOld == nil {
+		klog.Error("Update event has no old object to update", "event", e)
+		return false
+	}
+	if e.ObjectNew == nil {
+		klog.Error("Update event has no new object to update", "event", e)
+		return false
+	}
+	if e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() {
+		return true
+	}
+	if !equality.Semantic.DeepEqual(e.ObjectNew.GetFinalizers(), e.ObjectOld.GetFinalizers()) {
+		return true
+	}
+	if !equality.Semantic.DeepEqual(e.ObjectNew.GetLabels(), e.ObjectOld.GetLabels()) {
+		return true
+	}
+	if !equality.Semantic.DeepEqual(e.ObjectNew.GetAnnotations(), e.ObjectOld.GetAnnotations()) {
+		return true
+	}
+	return false
 }
 
 // Return true when label/annotation is changed or generation is changed

@@ -22,6 +22,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,42 +30,52 @@ import (
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
-type appliedResourceTracker struct {
-	hubClient   client.Client
-	spokeClient client.Client
-	restMapper  meta.RESTMapper
-}
-
 // AppliedWorkReconciler reconciles an AppliedWork object
 type AppliedWorkReconciler struct {
 	appliedResourceTracker
+	clusterNameSpace string
 }
 
-func newAppliedWorkReconciler(hubClient client.Client, spokeClient client.Client, restMapper meta.RESTMapper) *AppliedWorkReconciler {
+func newAppliedWorkReconciler(clusterNameSpace string, hubClient client.Client, spokeClient client.Client,
+	spokeDynamicClient dynamic.Interface, restMapper meta.RESTMapper) *AppliedWorkReconciler {
 	return &AppliedWorkReconciler{
-		appliedResourceTracker{
-			hubClient:   hubClient,
-			spokeClient: spokeClient,
-			restMapper:  restMapper,
+		appliedResourceTracker: appliedResourceTracker{
+			hubClient:          hubClient,
+			spokeClient:        spokeClient,
+			spokeDynamicClient: spokeDynamicClient,
+			restMapper:         restMapper,
 		},
+		clusterNameSpace: clusterNameSpace,
 	}
 }
 
 // Reconcile implement the control loop logic for AppliedWork object.
 func (r *AppliedWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	klog.InfoS("applied work reconcile loop triggered", "item", req.NamespacedName)
 	appliedWork := &workv1alpha1.AppliedWork{}
+	appliedWorkDeleted := false
 	err := r.spokeClient.Get(ctx, req.NamespacedName, appliedWork)
 	switch {
 	case errors.IsNotFound(err):
 		klog.InfoS("appliedWork does not exist", "item", req.NamespacedName)
-		return ctrl.Result{}, nil
+		appliedWork = nil
+		appliedWorkDeleted = true
 	case err != nil:
 		klog.ErrorS(err, "failed to get appliedWork", "item", req.NamespacedName)
 		return ctrl.Result{}, err
+	default:
+		klog.InfoS("get appliedWork in the member cluster", "item", req.NamespacedName)
 	}
-
-	klog.InfoS("applied work reconcile loop triggered", "item", req.NamespacedName)
-
+	nsWorkName := req.NamespacedName
+	nsWorkName.Namespace = r.clusterNameSpace
+	if _, err := r.reconcile(ctx, nil, appliedWork, nsWorkName); err != nil {
+		return ctrl.Result{}, err
+	}
+	// stop the periodic check if it's gone
+	if appliedWorkDeleted {
+		return ctrl.Result{}, nil
+	}
+	// we want to periodically check if what we've applied matches what is recorded
 	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 

@@ -26,6 +26,8 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+
+	clientset "sigs.k8s.io/work-api/pkg/client/clientset/versioned"
 )
 
 const (
@@ -65,25 +67,25 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
-	/*
-		hubClientset, err := clientset.NewForConfig(hubCfg)
-		if err != nil {
-			klog.Fatalf("Error building kubernetes clientset: %s", err.Error())
-		}
 
-		spokeClientset, err := clientset.NewForConfig(spokeCfg)
-		if err != nil {
-			klog.Fatalf("Error building example clientset: %s", err.Error())
-		}
-		hubInformerFactory := workinformers.NewSharedInformerFactory(hubClientset, time.Second*3)
-		spokeInformerFactory := workinformers.NewSharedInformerFactory(spokeClientset, time.Second*3)
-	*/
-	if err = newAppliedWorkReconciler(hubMgr.GetClient(), spokeMgr.GetClient(), restMapper).SetupWithManager(spokeMgr); err != nil {
+	spokeClientset, err := clientset.NewForConfig(spokeCfg)
+	if err != nil {
+		klog.Fatalf("Error building example clientset: %s", err.Error())
+	}
+	//
+	//hubClientset, err := clientset.NewForConfig(hubCfg)
+	//	if err != nil {
+	//		klog.Fatalf("Error building kubernetes clientset: %s", err.Error())
+	//	}
+	// hubInformerFactory := workinformers.NewSharedInformerFactory(hubClientset, time.Second*3)
+	// spokeInformerFactory := workinformers.NewSharedInformerFactory(spokeClientset, time.Second*3)
+
+	if err = newAppliedWorkReconciler(opts.Namespace, hubMgr.GetClient(), spokeMgr.GetClient(), spokeDynamicClient, restMapper).SetupWithManager(spokeMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AppliedWork")
 		return err
 	}
 
-	if err = newWorkStatusReconciler(hubMgr.GetClient(), spokeMgr.GetClient(), restMapper).SetupWithManager(hubMgr); err != nil {
+	if err = newWorkStatusReconciler(hubMgr.GetClient(), spokeMgr.GetClient(), spokeDynamicClient, restMapper).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkStatus")
 		return err
 	}
@@ -93,17 +95,17 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 		spokeDynamicClient: spokeDynamicClient,
 		spokeClient:        spokeMgr.GetClient(),
 		restMapper:         restMapper,
-		log:                ctrl.Log.WithName("controllers").WithName("Work"),
+		log:                ctrl.Log.WithName("Work reconciler"),
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Work")
 		return err
 	}
 
 	if err = (&FinalizeWorkReconciler{
-		client:             hubMgr.GetClient(),
-		spokeDynamicClient: spokeDynamicClient,
-		restMapper:         restMapper,
-		log:                ctrl.Log.WithName("controllers").WithName("WorkFinalize"),
+		client:      hubMgr.GetClient(),
+		spokeClient: spokeClientset,
+		restMapper:  restMapper,
+		log:         ctrl.Log.WithName("WorkFinalize reconcier"),
 	}).SetupWithManager(hubMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkFinalize")
 		return err

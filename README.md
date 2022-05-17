@@ -61,9 +61,9 @@ kubectl apply -k deploy
 
 ### Deploy a Work on the Hub cluster
 ```shell
-kubectl delete secret hub-kubeconfig-secret -n work --ignore-not-found
+kubectl delete secret hub-kubeconfig-secret -n work
 kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=/Users/ryanzhang/.kube/hub -n work
-go run cmd/workcontroller/workcontroller.go --work-namespace=work --hub-kubeconfig=hub-kubeconfig-secret
+go run cmd/workcontroller/workcontroller.go --work-namespace=cluster-a --hub-kubeconfig=hub-kubeconfig-secret
 ```
 
 
