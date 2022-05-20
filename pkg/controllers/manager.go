@@ -34,6 +34,8 @@ const (
 	workFinalizer        = "multicluster.x-k8s.io/work-cleanup"
 	appliedWorkFinalizer = "multicluster.x-k8s.io/appliedResource-cleanup"
 	specHashAnnotation   = "multicluster.x-k8s.io/spec-hash"
+
+	ConditionTypeApplied = "Applied"
 )
 
 // Start the controllers with the supplied config
@@ -80,6 +82,7 @@ func Start(ctx context.Context, hubCfg, spokeCfg *rest.Config, setupLog logr.Log
 	// hubInformerFactory := workinformers.NewSharedInformerFactory(hubClientset, time.Second*3)
 	// spokeInformerFactory := workinformers.NewSharedInformerFactory(spokeClientset, time.Second*3)
 
+	// TODO: Add event recorder
 	if err = newAppliedWorkReconciler(opts.Namespace, hubMgr.GetClient(), spokeMgr.GetClient(), spokeDynamicClient, restMapper).SetupWithManager(spokeMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AppliedWork")
 		return err

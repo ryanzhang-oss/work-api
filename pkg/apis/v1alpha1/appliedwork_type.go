@@ -44,21 +44,7 @@ type AppliedtWorkStatus struct {
 // AppliedManifestResourceMeta represents the group, version, resource, name and namespace of a resource.
 // Since these resources have been created, they must have valid group, version, resource, namespace, and name.
 type AppliedManifestResourceMeta struct {
-	// Group is the API Group of the Kubernetes resource.
-	// +required
-	Group string `json:"group"`
-
-	// Version is the version of the Kubernetes resource.
-	// +required
-	Version string `json:"version"`
-
-	// Resource is the resource name of the Kubernetes resource.
-	// +required
-	Resource string `json:"resource"`
-
-	// Name is the name of the Kubernetes resource.
-	// +required
-	Name string `json:"name"`
+	ResourceIdentifier `json:",inline"`
 
 	// UID is set on successful deletion of the Kubernetes resource by controller. The
 	// resource might be still visible on the managed cluster after this field is set.

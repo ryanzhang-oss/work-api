@@ -58,26 +58,27 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// cleanup finalizer and resources
 	if !work.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(work, workFinalizer) {
-			deletePolicy := metav1.DeletePropagationForeground
-			err := r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Delete(ctx, req.Name,
-				metav1.DeleteOptions{PropagationPolicy: &deletePolicy})
-			if err != nil {
-				klog.ErrorS(err, "failed to delete the applied Work", req.NamespacedName.String())
+		return r.garbageCollectAppliedWork(ctx, work)
+	}
+
+	var appliedWork *workv1alpha1.AppliedWork
+	if controllerutil.ContainsFinalizer(work, workFinalizer) {
+		appliedWork, err = r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Get(ctx, req.Name, metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				klog.ErrorS(err, "the finalizer appliedWork object doesn't exist", "name", req.Name)
+			} else {
+				klog.ErrorS(err, "failed to get the  finalizer appliedWork", "name", req.Name)
 				return ctrl.Result{}, err
 			}
-			controllerutil.RemoveFinalizer(work, workFinalizer)
+		} else {
+			// everything is fine, don't need to do anything
+			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
 	}
 
-	// don't add finalizer to instances that already have it
-	if controllerutil.ContainsFinalizer(work, workFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	klog.InfoS("appliedWork does not exist yet, we will create it", "item", req.NamespacedName)
-	appliedWork := &workv1alpha1.AppliedWork{
+	klog.InfoS("appliedWork finalizer does not exist yet, we will create it", "item", req.NamespacedName)
+	appliedWork = &workv1alpha1.AppliedWork{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: req.Name,
 		},
@@ -93,6 +94,22 @@ func (r *FinalizeWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	work.Finalizers = append(work.Finalizers, workFinalizer)
+	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
+}
+
+// garbageCollectAppliedWork deletes the applied work
+func (r *FinalizeWorkReconciler) garbageCollectAppliedWork(ctx context.Context, work *workv1alpha1.Work) (ctrl.Result, error) {
+	if controllerutil.ContainsFinalizer(work, workFinalizer) {
+		deletePolicy := metav1.DeletePropagationForeground
+		err := r.spokeClient.MulticlusterV1alpha1().AppliedWorks().Delete(ctx, work.Name,
+			metav1.DeleteOptions{PropagationPolicy: &deletePolicy})
+		if err != nil {
+			klog.ErrorS(err, "failed to delete the applied Work", work.Name)
+			return ctrl.Result{}, err
+		}
+		klog.Infof("Removed the applied Work %s", work.Name)
+		controllerutil.RemoveFinalizer(work, workFinalizer)
+	}
 	return ctrl.Result{}, r.client.Update(ctx, work, &client.UpdateOptions{})
 }
 

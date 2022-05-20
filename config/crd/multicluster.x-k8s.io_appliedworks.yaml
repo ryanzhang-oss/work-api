@@ -71,14 +71,25 @@ spec:
                     namespace, and name.
                   properties:
                     group:
-                      description: Group is the API Group of the Kubernetes resource.
+                      description: Group is the group of the resource.
+                      type: string
+                    kind:
+                      description: Kind is the kind of the resource.
                       type: string
                     name:
-                      description: Name is the name of the Kubernetes resource.
+                      description: Name is the name of the resource
                       type: string
+                    namespace:
+                      description: Namespace is the namespace of the resource, the
+                        resource is cluster scoped if the value is empty
+                      type: string
+                    ordinal:
+                      description: Ordinal represents an index in manifests list,
+                        so the condition can still be linked to a manifest even thougth
+                        manifest cannot be parsed successfully.
+                      type: integer
                     resource:
-                      description: Resource is the resource name of the Kubernetes
-                        resource.
+                      description: Resource is the resource type of the resource
                       type: string
                     uid:
                       description: UID is set on successful deletion of the Kubernetes
@@ -87,13 +98,8 @@ spec:
                         directly settable by a client.
                       type: string
                     version:
-                      description: Version is the version of the Kubernetes resource.
+                      description: Version is the version of the resource.
                       type: string
-                  required:
-                  - group
-                  - name
-                  - resource
-                  - version
                   type: object
                 type: array
             type: object

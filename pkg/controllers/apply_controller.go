@@ -37,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
@@ -97,7 +96,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	errs := []error{}
 
 	// Update manifestCondition based on the results
-	manifestConditions := []workv1alpha1.ManifestCondition{}
+	var manifestConditions []workv1alpha1.ManifestCondition
 	for _, result := range results {
 		if result.err != nil {
 			errs = append(errs, result.err)
@@ -123,10 +122,12 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	err = r.client.Status().Update(ctx, work, &client.UpdateOptions{})
 	if err != nil {
+		klog.ErrorS(err, "update work status failed", "work", req.NamespacedName)
 		errs = append(errs, err)
 	}
 
 	if len(errs) != 0 {
+		klog.InfoS("we didn't apply all the manifest works successfully, queue the next reconcile", "work", req.NamespacedName)
 		return ctrl.Result{}, utilerrors.NewAggregate(errs)
 	}
 
@@ -135,7 +136,7 @@ func (r *ApplyWorkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
 	manifestConditions []workv1alpha1.ManifestCondition, owner metav1.OwnerReference) []applyResult {
-	results := []applyResult{}
+	var results []applyResult
 
 	for index, manifest := range manifests {
 		result := applyResult{
@@ -147,11 +148,14 @@ func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
 		} else {
 			var obj *unstructured.Unstructured
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
-			rawObj.SetOwnerReferences(append(rawObj.GetOwnerReferences(), owner))
+			rawObj.SetOwnerReferences(insertOwnerReference(rawObj.GetOwnerReferences(), owner))
 			observedGeneration := findObservedGenerationOfManifest(result.identifier, manifestConditions)
-			obj, result.updated, result.err = r.applyUnstructrued(gvr, rawObj, observedGeneration)
-			if obj != nil {
+			obj, result.updated, result.err = r.applyUnstructured(gvr, rawObj, observedGeneration)
+			if result.err == nil {
 				result.generation = obj.GetGeneration()
+				klog.V(5).InfoS("applied an unstructrued object", "gvr", gvr, "obj", obj.GetName(), "new observedGeneration", result.generation)
+			} else {
+				klog.ErrorS(err, "Failed to apply an unstructrued object", "gvr", gvr, "obj", rawObj.GetName())
 			}
 		}
 		results = append(results, result)
@@ -173,23 +177,23 @@ func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest)
 	return mapping.Resource, unstructuredObj, nil
 }
 
-func (r *ApplyWorkReconciler) applyUnstructrued(
+func (r *ApplyWorkReconciler) applyUnstructured(
 	gvr schema.GroupVersionResource,
-	required *unstructured.Unstructured,
+	workObj *unstructured.Unstructured,
 	observedGeneration int64) (*unstructured.Unstructured, bool, error) {
 
-	err := setSpecHashAnnotation(required)
+	err := setSpecHashAnnotation(workObj)
 	if err != nil {
 		return nil, false, err
 	}
 
-	existing, err := r.spokeDynamicClient.
+	curObj, err := r.spokeDynamicClient.
 		Resource(gvr).
-		Namespace(required.GetNamespace()).
-		Get(context.TODO(), required.GetName(), metav1.GetOptions{})
+		Namespace(workObj.GetNamespace()).
+		Get(context.TODO(), workObj.GetName(), metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(required.GetNamespace()).Create(
-			context.TODO(), required, metav1.CreateOptions{})
+		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).Create(
+			context.TODO(), workObj, metav1.CreateOptions{})
 		return actual, true, err
 	}
 	if err != nil {
@@ -197,58 +201,48 @@ func (r *ApplyWorkReconciler) applyUnstructrued(
 	}
 
 	// Compare and update the unstrcuctured.
-	if isManifestModified(observedGeneration, gvr, existing, required) {
-		required.SetResourceVersion(existing.GetResourceVersion())
-		actual, err := r.spokeDynamicClient.Resource(gvr).Namespace(required.GetNamespace()).Update(
-			context.TODO(), required, metav1.UpdateOptions{})
+	needUpdate := false
+	if !isSameUnstructuredMeta(workObj, curObj) {
+		klog.V(5).InfoS("work object meta has changed", "gvr", gvr, "obj", workObj.GetName())
+		needUpdate = true
+		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
+		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
+		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
+	}
+
+	if isManifestModified(observedGeneration, curObj, workObj) || needUpdate {
+		newData, err := workObj.MarshalJSON()
+		var actual *unstructured.Unstructured
+		// TODO: revisit the logic when the observed generation is behind the curObj. We probably should use severside apply instead.
+		actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
+			Patch(context.TODO(), workObj.GetName(), types.ApplyPatchType, newData, metav1.PatchOptions{FieldManager: "work-api"})
+		if err != nil {
+			klog.ErrorS(err, "work object patched failed", "gvr", gvr, "obj", workObj.GetName())
+			workObj.SetResourceVersion(curObj.GetResourceVersion())
+			actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).Update(
+				context.TODO(), workObj, metav1.UpdateOptions{})
+			klog.V(5).InfoS("work object updated", "gvr", gvr, "obj", workObj.GetName(), "err", err)
+		} else {
+			klog.V(5).InfoS("work object patched", "gvr", gvr, "obj", workObj.GetName())
+		}
 		return actual, true, err
 	}
 
-	return existing, false, nil
+	return curObj, false, nil
 }
 
 // SetupWithManager wires up the controller.
 func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{},
-		builder.WithPredicates(UpdateSpecOrMetaOnlyPredicate{})).Complete(r)
-}
-
-// We don't need to process t
-type UpdateSpecOrMetaOnlyPredicate struct {
-	predicate.Funcs
-}
-
-func (UpdateSpecOrMetaOnlyPredicate) Update(e event.UpdateEvent) bool {
-	if e.ObjectOld == nil {
-		klog.Error("Update event has no old object to update", "event", e)
-		return false
-	}
-	if e.ObjectNew == nil {
-		klog.Error("Update event has no new object to update", "event", e)
-		return false
-	}
-	if e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() {
-		return true
-	}
-	if !equality.Semantic.DeepEqual(e.ObjectNew.GetFinalizers(), e.ObjectOld.GetFinalizers()) {
-		return true
-	}
-	if !equality.Semantic.DeepEqual(e.ObjectNew.GetLabels(), e.ObjectOld.GetLabels()) {
-		return true
-	}
-	if !equality.Semantic.DeepEqual(e.ObjectNew.GetAnnotations(), e.ObjectOld.GetAnnotations()) {
-		return true
-	}
-	return false
+		builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).Complete(r)
 }
 
 // Return true when label/annotation is changed or generation is changed
-func isManifestModified(observedGeneration int64, gvr schema.GroupVersionResource, existing, required *unstructured.Unstructured) bool {
-	if !isSameUnstructuredMeta(required, existing) {
-		return true
-	}
-
-	if existing.GetGeneration() != observedGeneration {
+func isManifestModified(observedGeneration int64, curObj, workObj *unstructured.Unstructured) bool {
+	// TODO: revisit this logic when the observed generation is different from the current object
+	if curObj.GetGeneration() != observedGeneration {
+		klog.V(5).InfoS("work object generation has changed", "obj", curObj.GetName(),
+			"curobj generation", curObj.GetGeneration(), "observedGeneration", observedGeneration)
 		return true
 	}
 
@@ -257,7 +251,7 @@ func isManifestModified(observedGeneration int64, gvr schema.GroupVersionResourc
 
 // isSameUnstructuredMeta compares the metadata of two unstructured object.
 func isSameUnstructuredMeta(obj1, obj2 *unstructured.Unstructured) bool {
-	// Comapre gvk, name, namespace at first
+	// Compare gvk, name, namespace at first
 	if obj1.GroupVersionKind() != obj2.GroupVersionKind() {
 		return false
 	}
@@ -275,8 +269,49 @@ func isSameUnstructuredMeta(obj1, obj2 *unstructured.Unstructured) bool {
 	if !equality.Semantic.DeepEqual(obj1.GetAnnotations(), obj2.GetAnnotations()) {
 		return false
 	}
+	if !equality.Semantic.DeepEqual(obj1.GetOwnerReferences(), obj2.GetOwnerReferences()) {
+		return false
+	}
 
 	return true
+}
+
+// MergeMapOverrideWithDst merges two could be nil maps. Keep the dst for any conflicts,
+func mergeMapOverrideWithDst(src, dst map[string]string) map[string]string {
+	if src == nil && dst == nil {
+		return nil
+	}
+	r := make(map[string]string)
+	for k, v := range src {
+		r[k] = v
+	}
+	// override the src for the same key
+	for k, v := range dst {
+		r[k] = v
+	}
+	return r
+}
+
+func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
+	found := false
+	for _, owner := range owners {
+		if owner.APIVersion == newOwner.APIVersion && owner.Kind == newOwner.Kind && owner.Name == owner.Name {
+			found = true
+			break
+		}
+	}
+	if found {
+		return owners
+	} else {
+		return append(owners, newOwner)
+	}
+}
+
+func mergeOwnerReference(owners, newOwners []metav1.OwnerReference) []metav1.OwnerReference {
+	for _, newOwner := range newOwners {
+		owners = insertOwnerReference(owners, newOwner)
+	}
+	return owners
 }
 
 // findManifestConditionByIdentifier return a ManifestCondition by identifier
@@ -304,7 +339,7 @@ func findManifestConditionByIdentifier(identifier workv1alpha1.ResourceIdentifie
 	return nil
 }
 
-// Find observeredGeneration for applied condition type for a manifest.
+// Find the observed generation for an applied condition type for a manifest.
 func findObservedGenerationOfManifest(
 	identifier workv1alpha1.ResourceIdentifier,
 	manifestConditions []workv1alpha1.ManifestCondition) int64 {
@@ -313,7 +348,7 @@ func findObservedGenerationOfManifest(
 		return 0
 	}
 
-	condition := meta.FindStatusCondition(manifestCondition.Conditions, "Applied")
+	condition := meta.FindStatusCondition(manifestCondition.Conditions, ConditionTypeApplied)
 	if condition == nil {
 		return 0
 	}
@@ -362,7 +397,7 @@ func buildResourceIdentifier(index int, object *unstructured.Unstructured, gvr s
 func buildAppliedStatusCondition(err error, observedGeneration int64) metav1.Condition {
 	if err != nil {
 		return metav1.Condition{
-			Type:               "Applied",
+			Type:               ConditionTypeApplied,
 			Status:             metav1.ConditionFalse,
 			LastTransitionTime: metav1.Now(),
 			Reason:             "AppliedManifestFailed",
@@ -371,7 +406,7 @@ func buildAppliedStatusCondition(err error, observedGeneration int64) metav1.Con
 	}
 
 	return metav1.Condition{
-		Type:               "Applied",
+		Type:               ConditionTypeApplied,
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: observedGeneration,
@@ -384,9 +419,9 @@ func buildAppliedStatusCondition(err error, observedGeneration int64) metav1.Con
 // If one of the manifests is applied failed on the spoke, the applied status condition of the work is false.
 func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.ManifestCondition, observedGeneration int64) metav1.Condition {
 	for _, manifestCond := range manifestConditions {
-		if meta.IsStatusConditionFalse(manifestCond.Conditions, "Applied") {
+		if meta.IsStatusConditionFalse(manifestCond.Conditions, ConditionTypeApplied) {
 			return metav1.Condition{
-				Type:               "Applied",
+				Type:               ConditionTypeApplied,
 				Status:             metav1.ConditionFalse,
 				Reason:             "AppliedWorkFailed",
 				Message:            "Failed to apply work",
@@ -396,7 +431,7 @@ func generateWorkAppliedStatusCondition(manifestConditions []workv1alpha1.Manife
 	}
 
 	return metav1.Condition{
-		Type:               "Applied",
+		Type:               ConditionTypeApplied,
 		Status:             metav1.ConditionTrue,
 		Reason:             "AppliedWorkComplete",
 		Message:            "Apply work complete",

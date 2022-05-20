@@ -11,10 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	workv1alpha1 "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
+	workapi "sigs.k8s.io/work-api/pkg/apis/v1alpha1"
 )
 
 type appliedResourceTracker struct {
@@ -24,63 +23,53 @@ type appliedResourceTracker struct {
 	restMapper         meta.RESTMapper
 }
 
-func (r *appliedResourceTracker) reconcile(ctx context.Context,
-	work *workv1alpha1.Work, appliedWork *workv1alpha1.AppliedWork, nsWorkName types.NamespacedName) (ctrl.Result, error) {
-	if work == nil {
-		work = &workv1alpha1.Work{}
-		// fetch work CR from the member cluster
-		err := r.hubClient.Get(ctx, nsWorkName, work)
-		switch {
-		case errors.IsNotFound(err):
-			klog.InfoS("work does not exist", "item", nsWorkName)
-			work = nil
-		case err != nil:
-			klog.ErrorS(err, "failed to get work", "item", nsWorkName)
-			return ctrl.Result{}, err
-		default:
-			klog.InfoS("work exists in the hub cluster", "item", nsWorkName)
-		}
+// Reconcile the difference between the work status/appliedWork status/what is on the member cluster
+// work.status represents what should be on the member cluster (it cannot be empty, we will reject empty work)
+// appliedWork.status represents what was on the member cluster (it's okay for it to be empty)
+// Objects in the appliedWork.status but not in the work.status should be removed from the member cluster.
+// We then go through all the work.status manifests whose condition is successfully applied
+// For each of them, we check if the object exists in the member cluster, if not, we recreate it according to the original manifest
+// We insert it into the new appliedWork.Status
+
+func (r *appliedResourceTracker) fetchWorks(ctx context.Context, nsWorkName types.NamespacedName) (*workapi.Work, *workapi.AppliedWork, error) {
+	work := &workapi.Work{}
+	appliedWork := &workapi.AppliedWork{}
+
+	// fetch work CR from the member cluster
+	err := r.hubClient.Get(ctx, nsWorkName, work)
+	switch {
+	case errors.IsNotFound(err):
+		klog.InfoS("work does not exist", "item", nsWorkName)
+		work = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get work", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(8).InfoS("work exists in the hub cluster", "item", nsWorkName)
 	}
 
-	if appliedWork == nil {
-		appliedWork = &workv1alpha1.AppliedWork{}
-		// fetch appliedWork CR from the member cluster
-		err := r.spokeClient.Get(ctx, nsWorkName, appliedWork)
-		switch {
-		case errors.IsNotFound(err):
-			klog.InfoS("appliedWork does not exist", "item", nsWorkName)
-			appliedWork = nil
-		case err != nil:
-			klog.ErrorS(err, "failed to get appliedWork", "item", nsWorkName)
-			return ctrl.Result{}, err
-		default:
-			klog.InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
-		}
+	// fetch appliedWork CR from the member cluster
+	err = r.spokeClient.Get(ctx, nsWorkName, appliedWork)
+	switch {
+	case errors.IsNotFound(err):
+		klog.InfoS("appliedWork does not exist", "item", nsWorkName)
+		appliedWork = nil
+	case err != nil:
+		klog.ErrorS(err, "failed to get appliedWork", "item", nsWorkName)
+		return nil, nil, err
+	default:
+		klog.V(8).InfoS("appliedWork exists in the member cluster", "item", nsWorkName)
 	}
 
 	if err := checkConsistentExist(work, appliedWork, nsWorkName); err != nil {
 		klog.ErrorS(err, "applied/work object existence not consistent", "item", nsWorkName)
-		return ctrl.Result{}, err
+		return nil, nil, err
 	}
 
-	if err := r.removeDeletedAppliedWork(ctx, work, appliedWork); err != nil {
-		klog.ErrorS(err, "failed to calculate the difference between the work and what we have applied", nsWorkName)
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, nil
+	return work, appliedWork, nil
 }
 
-// removeDeletedAppliedWork check the difference between what is supposed to be applied  (tracked by the work CR status)
-// and what was applied in the member cluster (tracked by the appliedWork CR) and remove those are applied but no longer exist in the work
-func (r *appliedResourceTracker) removeDeletedAppliedWork(ctx context.Context, work *workv1alpha1.Work, appliedWork *workv1alpha1.AppliedWork) error {
-	if work == nil && appliedWork == nil {
-		klog.InfoS("both applied and work are garbage collected")
-		return nil
-	}
-	return nil
-}
-
-func checkConsistentExist(work *workv1alpha1.Work, appliedWork *workv1alpha1.AppliedWork, workName types.NamespacedName) error {
+func checkConsistentExist(work *workapi.Work, appliedWork *workapi.AppliedWork, workName types.NamespacedName) error {
 	// work already deleted
 	if work == nil && appliedWork != nil {
 		return fmt.Errorf("work finalizer didn't delete the appliedWork %s", workName)
@@ -89,10 +78,13 @@ func checkConsistentExist(work *workv1alpha1.Work, appliedWork *workv1alpha1.App
 	if work != nil && appliedWork == nil {
 		return fmt.Errorf("work controller didn't create the appliedWork %s", workName)
 	}
+	if work == nil && appliedWork == nil {
+		klog.InfoS("both applied and work are garbage collected", "item", workName)
+	}
 	return nil
 }
 
-func (r *appliedResourceTracker) decodeUnstructured(manifest workv1alpha1.Manifest) (schema.GroupVersionResource, *unstructured.Unstructured, error) {
+func (r *appliedResourceTracker) decodeUnstructured(manifest workapi.Manifest) (schema.GroupVersionResource, *unstructured.Unstructured, error) {
 	unstructuredObj := &unstructured.Unstructured{}
 	err := unstructuredObj.UnmarshalJSON(manifest.Raw)
 	if err != nil {

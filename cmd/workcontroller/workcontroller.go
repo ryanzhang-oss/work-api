@@ -30,6 +30,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -57,6 +58,7 @@ func main() {
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&hubkubeconfig, "hub-kubeconfig", "", "Paths to a kubeconfig connect to hub.")
 	flag.StringVar(&workNamespace, "work-namespace", "", "Namespace to watch for work.")
+	klog.InitFlags(nil)
 	flag.Parse()
 	opts := ctrl.Options{
 		Scheme:             scheme,
@@ -66,6 +68,7 @@ func main() {
 		Namespace:          workNamespace,
 	}
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	// use the command flag
 
 	hubConfig, err := getKubeConfig(hubkubeconfig)
 	if err != nil {
@@ -85,7 +88,7 @@ func getKubeConfig(hubkubeconfig string) (*restclient.Config, error) {
 		return nil, errors.Wrap(err, "cannot create the spoke client")
 	}
 
-	secret, err := spokeClientSet.CoreV1().Secrets("work").Get(context.Background(), hubkubeconfig, metav1.GetOptions{})
+	secret, err := spokeClientSet.CoreV1().Secrets("fleet-system").Get(context.Background(), hubkubeconfig, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot find kubeconfig secrete")
 	}
