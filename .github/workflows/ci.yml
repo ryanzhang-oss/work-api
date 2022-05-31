@@ -9,6 +9,9 @@ on:
     branches:
       - master
       - release-*
+defaults:
+  run:
+    working-directory: go/src/sigs.k8s.io/work-api
 
 env:
   # Common versions
@@ -17,12 +20,7 @@ env:
   KIND_VERSION: 'v0.11.1'
   GO_PATH: '/home/runner/work/work-api/work-api/go'
 
-defaults:
-  run:
-    working-directory: go/src/sigs.k8s.io/work-api
-
 jobs:
-
   detect-noop:
     runs-on: ubuntu-latest
     outputs:
@@ -58,6 +56,7 @@ jobs:
           # show only new issues if it's a pull request.
           only-new-issues: false
           args: --timeout 3m0s
+
   verify:
     name: verify
     runs-on: ubuntu-latest
@@ -77,6 +76,7 @@ jobs:
         run: hack/verify-all.sh -v
         env:
           GOPATH: ${{ env.GO_PATH }}
+
   test:
     name: unit test
     needs: verify
@@ -111,6 +111,7 @@ jobs:
           files: ./cover.out
           flags: ci-tests
           name: codecov-umbrella
+
   e2e:
     name: e2e
     runs-on: ubuntu-latest
