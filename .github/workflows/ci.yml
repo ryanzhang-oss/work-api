@@ -12,7 +12,7 @@ on:
 
 env:
   # Common versions
-  GO_VERSION: '1.17'
+  GO_VERSION: '1.16.x'
   GOLANGCI_VERSION: 'v1.38'
   KIND_VERSION: 'v0.11.1'
   GO_PATH: '/home/runner/work/work-api/work-api/go'
