@@ -150,7 +150,7 @@ func (r *ApplyWorkReconciler) applyManifests(manifests []workv1alpha1.Manifest,
 			result.identifier = buildResourceIdentifier(index, rawObj, gvr)
 			rawObj.SetOwnerReferences(insertOwnerReference(rawObj.GetOwnerReferences(), owner))
 			observedGeneration := findObservedGenerationOfManifest(result.identifier, manifestConditions)
-			obj, result.updated, result.err = r.applyUnstructured(gvr, rawObj, observedGeneration, owner)
+			obj, result.updated, result.err = r.applyUnstructured(gvr, rawObj, observedGeneration)
 			if result.err == nil {
 				result.generation = obj.GetGeneration()
 				klog.V(5).InfoS("applied an unstructrued object", "gvr", gvr, "obj", obj.GetName(), "new observedGeneration", result.generation)
@@ -180,8 +180,7 @@ func (r *ApplyWorkReconciler) decodeUnstructured(manifest workv1alpha1.Manifest)
 func (r *ApplyWorkReconciler) applyUnstructured(
 	gvr schema.GroupVersionResource,
 	workObj *unstructured.Unstructured,
-	observedGeneration int64,
-	owner metav1.OwnerReference) (*unstructured.Unstructured, bool, error) {
+	observedGeneration int64) (*unstructured.Unstructured, bool, error) {
 
 	err := setSpecHashAnnotation(workObj)
 	if err != nil {
@@ -200,13 +199,8 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	if err != nil {
 		return nil, false, err
 	}
-	found := false
-	for _, curOwner := range curObj.GetOwnerReferences() {
-		if curOwner.APIVersion == owner.APIVersion && curOwner.Kind == owner.Kind && curOwner.Name == owner.Name && curOwner.UID == owner.UID {
-			found = true
-		}
-	}
-	if !found {
+
+	if !findOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
 		err = fmt.Errorf("this object is not owned by the work-api")
 		klog.V(5).InfoS("This object is not owned by the work-api.", "gvr", gvr, "obj", workObj.GetName(), "err", err)
 		return nil, false, err
@@ -309,15 +303,17 @@ func mergeMapOverrideWithDst(src, dst map[string]string) map[string]string {
 	return r
 }
 
-func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
-	found := false
+func findOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerReference) bool {
 	for _, owner := range owners {
-		if owner.APIVersion == newOwner.APIVersion && owner.Kind == newOwner.Kind && owner.Name == owner.Name {
-			found = true
-			break
+		if owner.APIVersion == target.APIVersion && owner.Kind == target.Kind && owner.Name == target.Name && owner.UID == target.UID {
+			return true
 		}
 	}
-	if found {
+	return false
+}
+
+func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
+	if findOwnerReference(owners, newOwner) {
 		return owners
 	} else {
 		return append(owners, newOwner)
