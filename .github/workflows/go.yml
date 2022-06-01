@@ -61,31 +61,30 @@ jobs:
       - name: Static Check
         run: staticcheck ./...
 
-#  Disabled due to module using wrong version of go.
-#  lint:
-#    runs-on: ubuntu-20.04
-#    needs: detect-noop
-#    if: needs.detect-noop.outputs.noop != 'true'
-#
-#    steps:
-#      - name: Checkout
-#        uses: actions/checkout@v2
-#        with:
-#          submodules: true
-#
-#      - name: Cache Go Dependencies
-#        uses: actions/cache@v2
-#        with:
-#          path: .work/pkg
-#          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-#          restore-keys: ${{ runner.os }}-pkg-
+  lint:
+    runs-on: ubuntu-20.04
+    needs: detect-noop
+    if: needs.detect-noop.outputs.noop != 'true'
 
-#      # This action uses its own setup-go, which always seems to use the latest
-#      # stable version of Go. We could run 'make lint' to ensure our desired Go
-#      # version, but we prefer this action because it leaves 'annotations' (i.e.
-#      # it comments on PRs to point out linter violations).
-#      - name: Lint
-#        uses: golangci/golangci-lint-action@v2
-#        with:
-#          version: ${{ env.GOLANGCI_VERSION }}
-#        timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Cache Go Dependencies
+        uses: actions/cache@v2
+        with:
+          path: .work/pkg
+          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-pkg-
+
+      # This action uses its own setup-go, which always seems to use the latest
+      # stable version of Go. We could run 'make lint' to ensure our desired Go
+      # version, but we prefer this action because it leaves 'annotations' (i.e.
+      # it comments on PRs to point out linter violations).
+      - name: Lint
+        uses: golangci/golangci-lint-action@v2
+        with:
+          version: ${{ env.GOLANGCI_VERSION }}
+        timeout-minutes: 10
