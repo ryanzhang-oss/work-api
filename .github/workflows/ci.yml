@@ -43,12 +43,12 @@ jobs:
       - name: install Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.16.x
+          go-version: '1.16.x'
 
       - name: verify
         run: hack/verify-all.sh -v
         env:
-          GOPATH: ${{ env.GO_PATH }}
+          GOPATH: '/home/runner/work/work-api/work-api/go'
 
   test:
     name: unit test
