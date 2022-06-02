@@ -19,8 +19,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -71,13 +69,6 @@ var _ = ginkgo.Describe("Apply Work", func() {
 
 			_, err := hubWorkClient.MulticlusterV1alpha1().Works(workNamespace).Create(context.Background(), work, metav1.CreateOptions{})
 			gomega.Expect(err).ToNot(gomega.HaveOccurred())
-			time.Sleep(5)
-
-			list, err := spokeKubeClient.AppsV1().Deployments("default").List(context.Background(), metav1.ListOptions{})
-			println("=================dep")
-			for _, item := range list.Items {
-				println(item.Name)
-			}
 
 			gomega.Eventually(func() error {
 				_, err := spokeKubeClient.AppsV1().Deployments("default").Get(context.Background(), "test-nginx", metav1.GetOptions{})
