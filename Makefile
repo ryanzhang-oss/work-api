@@ -148,6 +148,6 @@ e2e-hub-kubeconfig-secret: cluster-ip
 	cp $(HUB_KUBECONFIG) e2e-hub-kubeconfig
 	kubectl apply -f deploy/component_namespace.yaml --kubeconfig $(SPOKE_KUBECONFIG)
 	kubectl config set clusters.$(HUB_KUBECONFIG_CONTEXT).server https://$(CLUSTER_IP) --kubeconfig e2e-hub-kubeconfig
-	kubectl delete secret hub-kubeconfig-secret -n work --ignore-not-found --kubeconfig $(SPOKE_KUBECONFIG)
-	kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=e2e-hub-kubeconfig -n work --kubeconfig $(SPOKE_KUBECONFIG)
+	kubectl delete secret hub-kubeconfig-secret -n fleet-system --ignore-not-found --kubeconfig $(SPOKE_KUBECONFIG)
+	kubectl create secret generic hub-kubeconfig-secret --from-file=kubeconfig=e2e-hub-kubeconfig -n fleet-system --kubeconfig $(SPOKE_KUBECONFIG)
 	rm ./e2e-hub-kubeconfig
