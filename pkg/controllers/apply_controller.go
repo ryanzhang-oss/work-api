@@ -203,6 +203,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	}
 
 	if !findOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
+		// TODO: Block All Owner reference in the Work Manifest.
 		err = fmt.Errorf("this object is not owned by the work-api")
 		klog.V(5).InfoS("This object is not owned by the work-api.", "gvr", gvr, "obj", workObj.GetName(), "err", err)
 		return nil, false, err
@@ -295,6 +296,7 @@ func mergeMapOverrideWithDst(src, dst map[string]string) map[string]string {
 }
 
 func findOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerReference) bool {
+	// TODO: Move to a util directory or find an existing library.
 	for _, owner := range owners {
 		if owner.APIVersion == target.APIVersion && owner.Kind == target.Kind && owner.Name == target.Name && owner.UID == target.UID {
 			return true
