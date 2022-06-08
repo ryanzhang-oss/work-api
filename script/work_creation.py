@@ -33,35 +33,43 @@ def editWork(y, num):
     modified_name = "modified" + str(num) + ".yaml"
     with open(modified_name, "w") as output:
         yaml.dump(y, output, default_flow_style=False, sort_keys=False)
-    return modified_name
 
-def createWork(modified_name):
     subprocess.run(["kubectl", "apply", "-f", modified_name])
+    output.close()
     os.remove(modified_name)
-    
+
 def main():
     with open("example-work.yaml") as f:
         y = yaml.safe_load(f)
 
-    processes = []
-    batch_size = 50
+    batch_size = 25
+    skip_counter = 0
     batch_num = int(int(sys.argv[1]) / batch_size)
     if batch_num > 0:
         for i in range(0, batch_num - 1):
+            processes = []
             for i in range(0, batch_size):
-                p = multiprocessing.Process(target = createWork, args = (editWork(y, i),))
-                p.start()
-                processes.append(p)
+                try:
+                    str_error = None
+                    p = multiprocessing.Process(target = editWork, args = (y,i,))
+                    p.start()
+                    processes.append(p)
+                except Exception as e:
+                    skip_counter += 1
+                    pass
             for p in processes:
                 p.join()
 
     for i in range(0, int(sys.argv[1]) % batch_size):
-        p = multiprocessing.Process(target = createWork, args = (editWork(y, i),))
+        p = multiprocessing.Process(target = editWork, args = (y,i,))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
-    
+
+    print("final skip counter is" + str(skip_counter))
+
 if __name__ == "__main__":
     main()
+
