@@ -202,6 +202,13 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		return nil, false, err
 	}
 
+	if !findOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()[0]) {
+		// TODO: Block All Owner reference in the Work Manifest.
+		err = fmt.Errorf("this object is not owned by the work-api")
+		klog.V(5).InfoS("This object is not owned by the work-api.", "gvr", gvr, "obj", workObj.GetName(), "err", err)
+		return nil, false, err
+	}
+
 	// Compare and update the unstrcuctured.
 	needUpdate := false
 	if !isSameUnstructuredMeta(workObj, curObj) {
@@ -223,6 +230,7 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 		actual, err = r.spokeDynamicClient.Resource(gvr).Namespace(workObj.GetNamespace()).
 			Patch(context.TODO(), workObj.GetName(), types.ApplyPatchType, newData,
 				metav1.PatchOptions{Force: pointer.Bool(true), FieldManager: "work-api agent"})
+
 		if err != nil {
 			klog.ErrorS(err, "work object patched failed", "gvr", gvr, "obj", workObj.GetName())
 			workObj.SetResourceVersion(curObj.GetResourceVersion())
@@ -287,17 +295,18 @@ func mergeMapOverrideWithDst(src, dst map[string]string) map[string]string {
 	return r
 }
 
-// insertOwnerReference inserts a new owner
-func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
-	found := false
+func findOwnerReference(owners []metav1.OwnerReference, target metav1.OwnerReference) bool {
+	// TODO: Move to a util directory or find an existing library.
 	for _, owner := range owners {
-		if owner.APIVersion == newOwner.APIVersion && owner.Kind == newOwner.Kind &&
-			owner.Name == newOwner.Name && owner.UID == newOwner.UID {
-			found = true
-			break
+		if owner.APIVersion == target.APIVersion && owner.Kind == target.Kind && owner.Name == target.Name && owner.UID == target.UID {
+			return true
 		}
 	}
-	if found {
+	return false
+}
+
+func insertOwnerReference(owners []metav1.OwnerReference, newOwner metav1.OwnerReference) []metav1.OwnerReference {
+	if findOwnerReference(owners, newOwner) {
 		return owners
 	} else {
 		return append(owners, newOwner)
