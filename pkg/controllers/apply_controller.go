@@ -215,13 +215,13 @@ func (r *ApplyWorkReconciler) applyUnstructured(
 	}
 
 	if updateWarranted {
-		klog.V(5).InfoS("work object meta has changed", "gvr", gvr, "obj", workObj.GetName())
+		klog.V(5).InfoS("work object's specification has changed", "gvr", gvr, "obj", workObj.GetName())
 		workObj.SetAnnotations(mergeMapOverrideWithDst(curObj.GetAnnotations(), workObj.GetAnnotations()))
 		workObj.SetLabels(mergeMapOverrideWithDst(curObj.GetLabels(), workObj.GetLabels()))
 		workObj.SetOwnerReferences(mergeOwnerReference(curObj.GetOwnerReferences(), workObj.GetOwnerReferences()))
 	}
 
-	if isManifestModified(observedGeneration, curObj, workObj) || updateWarranted {
+	if updateWarranted {
 		var actual *unstructured.Unstructured
 		newData, err := workObj.MarshalJSON()
 		if err != nil {
@@ -254,25 +254,9 @@ func (r *ApplyWorkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).Complete(r)
 }
 
-// Return true when label/annotation is changed or generation is changed
-func isManifestModified(observedGeneration int64, curObj, workObj *unstructured.Unstructured) bool {
-	if curObj.GetGeneration() != observedGeneration {
-		klog.V(5).InfoS("work object generation has changed", "obj", curObj.GetName(),
-			"curobj generation", curObj.GetGeneration(), "observedGeneration", observedGeneration)
-		return true
-	}
-
-	return false
-}
-
 // Determines if differences between two unstructured.Unstructured objects
 // differ in ways that warrant the update (reapply) of the object.
 func isUpdateWarranted(obj1, obj2 *unstructured.Unstructured) bool {
-	return !isSpecHashAnnotationEqual(obj1, obj2)
-}
-
-// Determines if two annotations (SpecHash) on the two argued objects are equal.
-func isSpecHashAnnotationEqual(obj1 *unstructured.Unstructured, obj2 *unstructured.Unstructured) bool {
 	return obj1.GetAnnotations()[specHashAnnotation] == obj2.GetAnnotations()[specHashAnnotation]
 }
 
