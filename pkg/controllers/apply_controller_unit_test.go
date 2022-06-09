@@ -49,11 +49,6 @@ var (
 )
 
 // This interface is needed for testMapper abstract class.
-type testMappingInterface interface {
-	meta.RESTMapper
-	RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error)
-}
-
 type testMapper struct {
 	meta.RESTMapper
 }
